@@ -933,19 +933,15 @@ function formatTime(date) {
 }
 
 // ─── INITIALISATION ───────────────────────────────────────────────────────────
-// Pre-configured API key (gemini-2.5-flash)
-const DEFAULT_API_KEY = 'AIzaSyA4Kch049i_7BGnKR8BmGfX_C0kaBOljUY';
-
 function init() {
   initTheme();
   updateReadyState();
 
-  // Restore API key from session storage, or fall back to default
-  const savedKey = sessionStorage.getItem('lexai-api-key') || DEFAULT_API_KEY;
+  // Restore API key from session storage only (no default — user must paste their own key)
+  const savedKey = sessionStorage.getItem('lexai-api-key');
   if (savedKey) {
     dom.apiKeyInput.value = savedKey;
     state.apiKey = savedKey;
-    sessionStorage.setItem('lexai-api-key', savedKey);
     showStatus(dom.apiKeyStatus, 'API key ready (gemini-2.5-flash)', 'success');
     updateReadyState();
   }
