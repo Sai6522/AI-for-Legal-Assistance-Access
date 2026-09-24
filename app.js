@@ -228,7 +228,10 @@ dom.fileInput.addEventListener('change', e => {
 dom.removeDoc.addEventListener('click', removeDocument);
 
 /**
- * Validates and starts PDF parsing for an uploaded file.
+ * Validates a user-selected file and initiates PDF parsing.
+ * Rejects non-PDF files and files exceeding MAX_FILE_SIZE_MB.
+ * @param {File} file - File object from drag-drop or file input.
+ * @returns {Promise<void>}
  */
 async function handleFile(file) {
   if (file.type !== 'application/pdf') {
@@ -255,7 +258,31 @@ async function handleFile(file) {
 }
 
 /**
- * Parses a PDF file using PDF.js, extracting text per page.
+ * Extracts and reconstructs plain text from a single PDF page's text content items.
+ * Detects line breaks via y-coordinate changes between items.
+ * @param {{ items: Array<{str: string, transform: number[]}> }} content - PDF.js text content.
+ * @returns {string} Reconstructed plain text for the page.
+ */
+function extractPageText(content) {
+  let pageText = '';
+  let lastY = null;
+  for (const item of content.items) {
+    if ('str' in item) {
+      if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+        pageText += '\n';
+      }
+      pageText += item.str;
+      lastY = item.transform[5];
+    }
+  }
+  return pageText.trim();
+}
+
+/**
+ * Parses a PDF file using PDF.js, extracting text from all pages in parallel
+ * via Promise.all for significantly faster processing on multi-page documents.
+ * @param {File} file - The PDF file to parse.
+ * @returns {Promise<void>}
  */
 async function parsePDF(file) {
   showProgress(0, 'Starting…');
@@ -266,36 +293,29 @@ async function parsePDF(file) {
 
     state.document.totalPages = pdf.numPages;
     state.document.pages = [];
+    showProgress(10, `Loading ${pdf.numPages} pages in parallel…`);
+
+    // Fetch all pages in parallel — significantly faster than sequential await-in-loop
+    const pageNums = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+    const pageTexts = await Promise.all(
+      pageNums.map(async (i) => {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        return extractPageText(content);
+      })
+    );
+
+    showProgress(80, 'Processing text…');
 
     let fullText = '';
     let wordCount = 0;
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-
-      // Reconstruct page text preserving rough line structure
-      let pageText = '';
-      let lastY = null;
-      for (const item of content.items) {
-        if ('str' in item) {
-          // New line detection based on y-coordinate change
-          if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-            pageText += '\n';
-          }
-          pageText += item.str;
-          lastY = item.transform[5];
-        }
-      }
-      pageText = pageText.trim();
-
-      state.document.pages.push({ pageNum: i, text: pageText });
-      fullText += `\n\n--- PAGE ${i} ---\n${pageText}`;
+    pageTexts.forEach((pageText, idx) => {
+      const pageNum = idx + 1;
+      state.document.pages.push({ pageNum, text: pageText });
+      fullText += `\n\n--- PAGE ${pageNum} ---\n${pageText}`;
       wordCount += pageText.split(/\s+/).filter(Boolean).length;
-
-      const progress = Math.round((i / pdf.numPages) * 100);
-      showProgress(progress, `Parsing page ${i} of ${pdf.numPages}…`);
-    }
+    });
 
     // Trim to context limit
     if (fullText.length > MAX_CONTEXT_CHARS) {
@@ -328,6 +348,10 @@ async function parsePDF(file) {
   }
 }
 
+/**
+ * Resets all document-related state to its initial empty values.
+ * Also clears conversation history and invalidates the document context cache.
+ */
 function resetDocumentState() {
   state.document = {
     name: '',
@@ -341,6 +365,10 @@ function resetDocumentState() {
   cachedDocumentContext = null; // invalidate cache for new document
 }
 
+/**
+ * Removes the currently loaded document, resets all state, and
+ * restores the upload drop zone UI.
+ */
 function removeDocument() {
   resetDocumentState();
   dom.dropZone.classList.remove('hidden');
@@ -351,11 +379,18 @@ function removeDocument() {
   updateReadyState();
 }
 
+/**
+ * Updates the document metadata line shown below the filename
+ * with page count and approximate word count.
+ */
 function updateDocMeta() {
   const { totalPages, wordCount } = state.document;
   dom.docMeta.textContent = `${totalPages} pages · ~${wordCount.toLocaleString()} words`;
 }
 
+/**
+ * Populates the Document Stats panel with page, word, chunk and character counts.
+ */
 function updateStats() {
   const { totalPages, wordCount, charCount, pages } = state.document;
   dom.statPages.textContent  = totalPages.toLocaleString();
@@ -364,6 +399,11 @@ function updateStats() {
   dom.statChars.textContent  = charCount.toLocaleString();
 }
 
+/**
+ * Shows the progress bar and updates its value and label text.
+ * @param {number} pct - Completion percentage (0–100).
+ * @param {string} label - Status text to display below the bar.
+ */
 function showProgress(pct, label) {
   dom.parseProgress.classList.remove('hidden');
   dom.parseBar.style.width = `${pct}%`;
@@ -371,6 +411,9 @@ function showProgress(pct, label) {
   dom.parseStatus.textContent = label;
 }
 
+/**
+ * Hides the progress bar and clears the status label.
+ */
 function hideProgress() {
   dom.parseProgress.classList.add('hidden');
   dom.parseStatus.textContent = '';
@@ -652,8 +695,36 @@ async function callGemini(question) {
 
 // ─── RENDERING ────────────────────────────────────────────────────────────────
 
+/** SVG icons keyed by avatar type, defined once to avoid inline duplication. */
+const AVATAR_ICONS = {
+  assistant: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`,
+  error:     `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+};
+
+/**
+ * Creates a standardised message avatar element.
+ * Extracted to eliminate duplicated avatar DOM code across
+ * renderAssistantResponse, renderErrorMessage, showTypingIndicator,
+ * and createMessageElement.
+ * @param {'user'|'assistant'|'error'} type - Avatar style.
+ * @returns {HTMLElement} A div.message-avatar element.
+ */
+function createMessageAvatar(type) {
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.setAttribute('aria-hidden', 'true');
+  if (type === 'user') {
+    avatar.textContent = 'You';
+  } else {
+    avatar.innerHTML = AVATAR_ICONS[type] || AVATAR_ICONS.assistant;
+  }
+  return avatar;
+}
+
 /**
  * Appends a user or assistant message bubble to the chat log.
+ * Does not scroll — callers are responsible for scrolling after all
+ * DOM mutations are complete to avoid redundant reflows.
  * @param {'user'|'assistant'} role - Speaker role.
  * @param {string} text - Message text content.
  * @returns {HTMLElement} The created message element.
@@ -661,12 +732,13 @@ async function callGemini(question) {
 function appendMessage(role, text) {
   const el = createMessageElement(role, text);
   dom.chatMessages.appendChild(el);
-  scrollChatToBottom();
   return el;
 }
 
 /**
- * Parses and renders the assistant's full response, extracting citations.
+ * Parses an AI response, extracts citations, and renders the full
+ * assistant message bubble with citation badges into the chat log.
+ * @param {string} text - Raw AI response text from Gemini.
  */
 function renderAssistantResponse(text) {
   const citations = extractCitations(text);
@@ -676,11 +748,7 @@ function renderAssistantResponse(text) {
   wrapper.classList.add('message', 'assistant');
   if (isNotFound) wrapper.classList.add('not-found');
 
-  // Avatar
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.setAttribute('aria-hidden', 'true');
-  avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`;
+  const avatar = createMessageAvatar('assistant');
 
   const content = document.createElement('div');
   content.className = 'message-content';
@@ -734,16 +802,14 @@ function renderAssistantResponse(text) {
 }
 
 /**
- * Renders an error message in chat.
+ * Renders an error message bubble in the chat log.
+ * @param {string} msg - Human-readable error description.
  */
 function renderErrorMessage(msg) {
   const wrapper = document.createElement('div');
   wrapper.className = 'message assistant not-found';
 
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.setAttribute('aria-hidden', 'true');
-  avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+  const avatar = createMessageAvatar('error');
 
   const content = document.createElement('div');
   content.className = 'message-content';
@@ -759,14 +825,18 @@ function renderErrorMessage(msg) {
   dom.chatMessages.appendChild(wrapper);
 }
 
+/**
+ * Creates a generic message wrapper element for user or assistant roles.
+ * Used by {@link appendMessage} for user messages and simple assistant text.
+ * @param {'user'|'assistant'} role - Speaker role.
+ * @param {string} text - Message text content.
+ * @returns {HTMLElement} Fully constructed message element ready to append.
+ */
 function createMessageElement(role, text) {
   const wrapper = document.createElement('div');
   wrapper.className = `message ${role}`;
 
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.setAttribute('aria-hidden', 'true');
-  avatar.textContent = role === 'user' ? 'You' : 'AI';
+  const avatar = createMessageAvatar(role);
 
   const content = document.createElement('div');
   content.className = 'message-content';
@@ -802,10 +872,7 @@ function showTypingIndicator() {
   wrapper.setAttribute('role', 'status');
   wrapper.setAttribute('aria-label', 'LexAI is thinking…');
 
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.setAttribute('aria-hidden', 'true');
-  avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>`;
+  const avatar = createMessageAvatar('assistant');
 
   const content = document.createElement('div');
   content.className = 'message-content';
@@ -843,15 +910,19 @@ function scrollChatToBottom() {
 // ─── CITATION EXTRACTION ──────────────────────────────────────────────────────
 
 /**
- * Extracts citation references like [Page 3], [Page 3, Clause 4.2], [Page 3, Section "Title"]
- * from the AI response text.
+ * Extracts all citation references from an AI response string.
+ * Supports formats: [Page N], [Page N, Clause X], [Page N, Section "Title"],
+ * [Page N, Article X], [Page N, Paragraph X], [Page N, Annex X].
+ * Deduplicates identical references and attaches source excerpts.
+ * @param {string} text - Raw AI response text.
+ * @returns {Array<{label: string, pageNum: number, sectionType: string|null, sectionId: string|null, excerpt: string}>}
  */
 function extractCitations(text) {
   const found = [];
   const seen = new Set();
 
-  // Matches: [Page N], [Page N, Clause X], [Page N, Section "Y"], [Page N, Section Y]
-  const pattern = /\[Page\s+(\d+)(?:,\s*(Clause|Section|Article|Paragraph|Clause|Annex)\s+([^\]]+))?\]/gi;
+  // Matches: [Page N], [Page N, Clause X], [Page N, Section "Y"], [Page N, Article Z], etc.
+  const pattern = /\[Page\s+(\d+)(?:,\s*(Clause|Section|Article|Paragraph|Annex)\s+([^\]]+))?\]/gi;
   let match;
 
   while ((match = pattern.exec(text)) !== null) {
@@ -878,7 +949,11 @@ function extractCitations(text) {
 }
 
 /**
- * Extracts a relevant excerpt from page text, searching for section/clause text.
+ * Extracts a relevant excerpt from a page's text, centred on the sectionId match.
+ * Falls back to the first 400 characters when no match is found.
+ * @param {string} pageText - Full text of the page.
+ * @param {string|null} sectionId - Clause/section identifier to search for.
+ * @returns {string} Excerpt string, truncated with ellipsis if needed.
  */
 function getExcerpt(pageText, sectionId) {
   if (!pageText) return '';
@@ -1005,46 +1080,51 @@ function showToast(message, type = 'info', durationMs = 5000) {
 // ─── TEXT FORMATTING ──────────────────────────────────────────────────────────
 
 /**
- * Converts plain AI response text to safe HTML with minimal markdown-like formatting.
- * Uses a whitelist approach to avoid XSS.
+ * Converts plain AI response text to safe HTML with markdown-like formatting.
+ *
+ * Runs a single sequential pipeline on the escaped string:
+ *   escape → bold → italic → citations → warnings → lists → paragraphs → line breaks
+ *
+ * Uses a whitelist/escape-first approach: raw text is HTML-entity-encoded before
+ * any markup is injected, preventing XSS from AI-generated content.
+ *
+ * @param {string} text - Raw plain-text response from the AI model.
+ * @returns {string} Safe HTML string wrapped in a <p> element.
  */
 function formatResponseHTML(text) {
-  let escaped = escapeHTML(text);
+  // Step 1 — escape all HTML entities first (XSS prevention)
+  let out = escapeHTML(text);
 
-  // Bold **text**
-  escaped = escaped.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  // Step 2 — inline formatting
+  out = out
+    // Bold **text**
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    // Italic *text* (only single asterisks not adjacent to bold markers)
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+    // Citation spans [Page N ...] → styled pill
+    .replace(
+      /\[Page\s+(\d+)(?:,\s*[^\]]+)?\]/g,
+      m => `<span class="inline-citation" aria-label="Citation: ${escapeAttr(m)}">${m}</span>`
+    )
+    // Warning lines starting with ⚠️
+    .replace(/(⚠️[^\n]+)/g, '<span class="response-warning">$1</span>');
 
-  // Italic *text*
-  escaped = escaped.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  // Step 3 — block structure (lists then paragraphs)
+  out = out
+    // Unordered list items (- or •)
+    .replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>')
+    // Numbered list items
+    .replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> runs in a single <ul>
+    .replace(/(<li>.*<\/li>(\n|<br>)*)+/gs, match => `<ul>${match}</ul>`)
+    // Collapse accidental nested ul tags
+    .replace(/<\/ul>\s*<ul>/g, '')
+    // Double newlines → paragraph break
+    .replace(/\n{2,}/g, '</p><p>')
+    // Single newline → line break
+    .replace(/\n/g, '<br>');
 
-  // Citation badges inline  [Page N, ...] → styled span
-  escaped = escaped.replace(
-    /\[Page\s+(\d+)(?:,\s*[^\]]+)?\]/g,
-    match => `<span class="inline-citation" aria-label="Citation: ${escapeAttr(match)}" style="font-size:.75rem;font-weight:600;color:var(--clr-primary);background:var(--clr-primary-light);padding:.1rem .35rem;border-radius:var(--radius-full);white-space:nowrap;">${match}</span>`
-  );
-
-  // Warning/not found blocks
-  escaped = escaped.replace(
-    /(⚠️[^\n]+)/g,
-    '<span style="color:var(--clr-warning);font-weight:600;">$1</span>'
-  );
-
-  // Bullet points: lines starting with - or •
-  escaped = escaped.replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>');
-  escaped = escaped.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
-  // Fix duplicate nested ul
-  escaped = escaped.replace(/<\/ul>\s*<ul>/g, '');
-
-  // Numbered lists
-  escaped = escaped.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-
-  // Paragraphs (double newline)
-  escaped = escaped.replace(/\n{2,}/g, '</p><p>');
-
-  // Single newlines → line break
-  escaped = escaped.replace(/\n/g, '<br>');
-
-  return `<p>${escaped}</p>`;
+  return `<p>${out}</p>`;
 }
 
 /**

@@ -650,6 +650,23 @@ ul { list-style: none; }
 .message-bubble p + p { margin-top: .5rem; }
 .message-bubble strong { font-weight: 600; }
 
+/* Inline citation pill rendered inside AI response text */
+.message-bubble .inline-citation {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--clr-primary);
+  background: var(--clr-primary-light);
+  padding: .1rem .35rem;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+/* Warning / NOT FOUND text inside AI response */
+.message-bubble .response-warning {
+  color: var(--clr-warning);
+  font-weight: 600;
+}
+
 /* Not found / warning state */
 .message.assistant.not-found .message-bubble {
   border-left: 4px solid var(--clr-warning);
