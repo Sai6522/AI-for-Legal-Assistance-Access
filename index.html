@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="LexAI – AI-powered legal document assistant that answers questions grounded strictly in your uploaded documents." />
+  <title>LexAI – Legal Document Assistant</title>
+
+  <!-- PDF.js from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcCpYNFbxkUXCOv7YXflEHTuaQCBrumVIkWqWzxX8/MFg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Skip to main content for keyboard/screen reader users -->
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- ===== HEADER ===== -->
+  <header class="site-header" role="banner">
+    <div class="header-inner">
+      <div class="brand">
+        <svg class="brand-icon" aria-hidden="true" focusable="false" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="8" fill="#1a56db"/>
+          <path d="M8 10h16M8 16h10M8 22h12" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="24" cy="20" r="5" fill="#f59e0b"/>
+          <path d="M22 20h4M24 18v4" stroke="#1a56db" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand-name">LexAI</span>
+        <span class="brand-tagline">Legal Document Assistant</span>
+      </div>
+      <nav class="header-nav" aria-label="Page navigation">
+        <button class="btn-icon" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <svg id="theme-icon-light" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg id="theme-icon-dark" aria-hidden="true" class="hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+          </svg>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ===== MAIN ===== -->
+  <main id="main-content" class="main-layout">
+
+    <!-- ===== SIDEBAR: Upload + Settings ===== -->
+    <aside class="sidebar" aria-label="Document upload and settings">
+
+      <!-- API Key Section -->
+      <section class="card" aria-labelledby="api-key-heading">
+        <h2 id="api-key-heading" class="card-title">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          API Configuration
+        </h2>
+        <div class="form-group">
+          <label for="api-key-input" class="form-label">Gemini API Key <span class="required" aria-label="required">*</span></label>
+          <div class="input-wrap">
+            <input
+              type="password"
+              id="api-key-input"
+              class="form-input"
+              placeholder="Enter your Gemini API key"
+              autocomplete="off"
+              aria-describedby="api-key-hint"
+            />
+            <button class="btn-icon input-toggle" id="toggle-api-key" aria-label="Show API key" title="Show/hide API key">
+              <svg aria-hidden="true" id="eye-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg aria-hidden="true" id="eye-closed" class="hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </button>
+          </div>
+          <p id="api-key-hint" class="form-hint">Pre-configured with Gemini 2.5 Flash. You can replace it with your own key. <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="link">Get a key →</a></p>
+        </div>
+        <div id="api-key-status" class="status-badge hidden" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- Upload Section -->
+      <section class="card" aria-labelledby="upload-heading">
+        <h2 id="upload-heading" class="card-title">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Upload Document
+        </h2>
+
+        <div
+          id="drop-zone"
+          class="drop-zone"
+          role="button"
+          tabindex="0"
+          aria-label="Upload legal document. Click or drag and drop a PDF file here."
+          aria-describedby="drop-zone-hint"
+        >
+          <svg class="drop-icon" aria-hidden="true" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
+          <p class="drop-primary">Drop your PDF here</p>
+          <p class="drop-secondary">or <span class="drop-link">browse to upload</span></p>
+          <p id="drop-zone-hint" class="drop-hint">Supports PDF files up to 20MB</p>
+        </div>
+        <input type="file" id="file-input" accept=".pdf" class="visually-hidden" aria-label="Choose PDF file" />
+
+        <!-- Document info -->
+        <div id="doc-info" class="doc-info hidden" role="region" aria-label="Loaded document information" aria-live="polite">
+          <div class="doc-info-inner">
+            <svg class="doc-icon" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div class="doc-details">
+              <p id="doc-name" class="doc-name"></p>
+              <p id="doc-meta" class="doc-meta"></p>
+            </div>
+            <button class="btn-icon btn-danger" id="remove-doc" aria-label="Remove document" title="Remove document">
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div id="parse-progress" class="progress-bar-wrap hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Document parsing progress">
+            <div id="parse-bar" class="progress-bar"></div>
+          </div>
+          <p id="parse-status" class="parse-status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <!-- Document Stats -->
+      <section id="doc-stats" class="card hidden" aria-labelledby="stats-heading">
+        <h2 id="stats-heading" class="card-title">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          Document Stats
+        </h2>
+        <dl class="stats-grid">
+          <div class="stat-item">
+            <dt class="stat-label">Pages</dt>
+            <dd id="stat-pages" class="stat-value">–</dd>
+          </div>
+          <div class="stat-item">
+            <dt class="stat-label">Words</dt>
+            <dd id="stat-words" class="stat-value">–</dd>
+          </div>
+          <div class="stat-item">
+            <dt class="stat-label">Chunks</dt>
+            <dd id="stat-chunks" class="stat-value">–</dd>
+          </div>
+          <div class="stat-item">
+            <dt class="stat-label">Characters</dt>
+            <dd id="stat-chars" class="stat-value">–</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- Suggested Questions -->
+      <section id="suggested-section" class="card hidden" aria-labelledby="suggested-heading">
+        <h2 id="suggested-heading" class="card-title">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Try Asking
+        </h2>
+        <ul class="suggested-list" id="suggested-list" role="list">
+          <li><button class="suggested-btn" data-question="What are the main obligations of each party?">What are the main obligations of each party?</button></li>
+          <li><button class="suggested-btn" data-question="What are the termination conditions?">What are the termination conditions?</button></li>
+          <li><button class="suggested-btn" data-question="What penalties or liabilities are mentioned?">What penalties or liabilities are mentioned?</button></li>
+          <li><button class="suggested-btn" data-question="Are there any confidentiality clauses?">Are there any confidentiality clauses?</button></li>
+          <li><button class="suggested-btn" data-question="What is the governing law for this agreement?">What is the governing law for this agreement?</button></li>
+          <li><button class="suggested-btn" data-question="Summarize this document in plain language.">Summarize this document in plain language.</button></li>
+        </ul>
+      </section>
+
+    </aside>
+
+    <!-- ===== CHAT PANEL ===== -->
+    <section class="chat-panel" aria-labelledby="chat-heading">
+
+      <!-- Welcome / empty state -->
+      <div id="welcome-state" class="welcome-state" role="region" aria-label="Getting started">
+        <div class="welcome-inner">
+          <div class="welcome-icon" aria-hidden="true">
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="64" height="64" rx="16" fill="#eff6ff"/>
+              <path d="M16 20h32M16 30h20M16 40h24" stroke="#1a56db" stroke-width="3" stroke-linecap="round"/>
+              <circle cx="48" cy="40" r="10" fill="#f59e0b"/>
+              <path d="M45 40h6M48 37v6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h1 id="chat-heading" class="welcome-title">Ask questions about your legal document</h1>
+          <p class="welcome-subtitle">Upload a PDF legal document on the left, then ask any question. LexAI will answer strictly based on what's in your document — with citations to specific pages and clauses.</p>
+          <ul class="welcome-features" role="list">
+            <li>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Answers grounded only in your document
+            </li>
+            <li>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Citations with page numbers and clause references
+            </li>
+            <li>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Explicit "not found" when information is absent
+            </li>
+            <li>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Plain-language explanations of complex legal terms
+            </li>
+          </ul>
+          <p class="welcome-disclaimer">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            LexAI is an informational tool only. It does not provide legal advice. Consult a qualified lawyer for legal decisions.
+          </p>
+        </div>
+      </div>
+
+      <!-- Chat messages -->
+      <div id="chat-messages" class="chat-messages hidden" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
+      </div>
+
+      <!-- Chat input area -->
+      <div class="chat-input-area" role="region" aria-label="Ask a question">
+        <div id="input-notice" class="input-notice" role="status" aria-live="polite">
+          Upload a document and enter your API key to start asking questions.
+        </div>
+        <form id="chat-form" class="chat-form" aria-label="Ask a question about the document" novalidate>
+          <div class="chat-input-wrap">
+            <label for="question-input" class="visually-hidden">Ask a question about the document</label>
+            <textarea
+              id="question-input"
+              class="chat-textarea"
+              placeholder="Ask a question about your legal document…"
+              rows="1"
+              maxlength="2000"
+              aria-describedby="char-count input-notice"
+              disabled
+            ></textarea>
+            <div class="chat-controls">
+              <span id="char-count" class="char-count" aria-live="polite" aria-label="Characters used">0 / 2000</span>
+              <button type="submit" id="send-btn" class="btn-primary" disabled aria-label="Send question">
+                <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                <span>Ask</span>
+              </button>
+            </div>
+          </div>
+        </form>
+        <p class="input-footer">LexAI only answers from your document. It will say "not found" rather than guess.</p>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ===== TOAST NOTIFICATIONS ===== -->
+  <div id="toast-container" class="toast-container" role="region" aria-label="Notifications" aria-live="assertive"></div>
+
+  <!-- ===== MODAL: Citation Detail ===== -->
+  <div id="citation-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-body">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title" class="modal-title">Source Excerpt</h2>
+        <button class="btn-icon" id="modal-close" aria-label="Close citation detail">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="modal-body" class="modal-body">
+        <dl class="modal-meta">
+          <div>
+            <dt>Page</dt>
+            <dd id="modal-page">–</dd>
+          </div>
+          <div>
+            <dt>Section</dt>
+            <dd id="modal-section">–</dd>
+          </div>
+        </dl>
+        <blockquote id="modal-excerpt" class="modal-excerpt"></blockquote>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

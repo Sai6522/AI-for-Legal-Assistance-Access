@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+
+# Python cache (from PDF generation script)
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+.idea/

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>LexAI – Test Runner</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #f8fafc; color: #0f172a; }
+    h1 { color: #1a56db; }
+    .suite { margin: 1.5rem 0; background: white; border-radius: .5rem; border: 1px solid #e2e8f0; overflow: hidden; }
+    .suite-header { padding: .75rem 1rem; background: #f1f5f9; font-weight: 700; border-bottom: 1px solid #e2e8f0; }
+    .test { padding: .5rem 1rem; display: flex; gap: .5rem; align-items: flex-start; font-size: .875rem; border-bottom: 1px solid #f1f5f9; }
+    .test:last-child { border-bottom: none; }
+    .test.pass .icon { color: #10b981; }
+    .test.fail .icon { color: #ef4444; }
+    .test.fail { background: #fef2f2; }
+    .error-msg { font-size: .75rem; color: #991b1b; margin-top: .25rem; font-family: monospace; }
+    .summary { padding: 1rem; background: white; border-radius: .5rem; border: 1px solid #e2e8f0; display: flex; gap: 2rem; }
+    .stat { text-align: center; }
+    .stat-n { font-size: 2rem; font-weight: 700; }
+    .stat-n.pass { color: #10b981; }
+    .stat-n.fail { color: #ef4444; }
+    .stat-l { font-size: .75rem; color: #64748b; }
+  </style>
+</head>
+<body>
+  <h1>🧪 LexAI Test Runner</h1>
+  <div id="summary" class="summary">
+    <div class="stat"><div class="stat-n" id="s-pass">–</div><div class="stat-l">Passed</div></div>
+    <div class="stat"><div class="stat-n" id="s-fail">–</div><div class="stat-l">Failed</div></div>
+    <div class="stat"><div class="stat-n" id="s-total">–</div><div class="stat-l">Total</div></div>
+  </div>
+  <div id="output"></div>
+
+<script>
+// ─── Inline test utilities from app.js ────────────────────────────────────────
+function escapeHTML(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function extractCitations(text, pages = []) {
+  const found = [], seen = new Set();
+  const pattern = /\[Page\s+(\d+)(?:,\s*(Clause|Section|Article|Paragraph|Annex)\s+([^\]]+))?\]/gi;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const pageNum = parseInt(match[1], 10);
+    const sectionType = match[2] || null;
+    const sectionId = match[3] ? match[3].replace(/['"]/g, '').trim() : null;
+    const label = sectionType ? `Page ${pageNum}, ${sectionType} ${sectionId}` : `Page ${pageNum}`;
+    if (!seen.has(label)) {
+      seen.add(label);
+      const pageData = pages.find(p => p.pageNum === pageNum);
+      found.push({ label, pageNum, sectionType, sectionId, excerpt: pageData ? pageData.text.slice(0,400) : '' });
+    }
+  }
+  return found;
+}
+
+function getExcerpt(pageText, sectionId) {
+  if (!pageText) return '';
+  if (!sectionId) return pageText.slice(0, 400) + (pageText.length > 400 ? '…' : '');
+  const idx = pageText.toLowerCase().indexOf(sectionId.toLowerCase());
+  if (idx === -1) return pageText.slice(0, 400) + (pageText.length > 400 ? '…' : '');
+  const start = Math.max(0, idx - 100), end = Math.min(pageText.length, idx + 400);
+  return (start > 0 ? '…' : '') + pageText.slice(start, end) + (end < pageText.length ? '…' : '');
+}
+
+function validateFile(file) {
+  const MAX_MB = 20;
+  if (!file || file.type !== 'application/pdf') return { valid: false, error: 'Only PDF files are supported.' };
+  const sizeMB = file.size / (1024 * 1024);
+  if (sizeMB > MAX_MB) return { valid: false, error: `File is too large (${sizeMB.toFixed(1)} MB). Maximum is ${MAX_MB} MB.` };
+  return { valid: true };
+}
+
+function isNotFoundResponse(text) { return /NOT FOUND IN DOCUMENT/i.test(text); }
+function formatWordCount(n) { return n.toLocaleString('en-US'); }
+
+// ─── Test framework ───────────────────────────────────────────────────────────
+let passed = 0, failed = 0;
+let currentSuite = null;
+const output = document.getElementById('output');
+
+function describe(name, fn) {
+  currentSuite = document.createElement('div');
+  currentSuite.className = 'suite';
+  const header = document.createElement('div');
+  header.className = 'suite-header';
+  header.textContent = `📦 ${name}`;
+  currentSuite.appendChild(header);
+  output.appendChild(currentSuite);
+  fn();
+}
+
+function it(name, fn) {
+  const el = document.createElement('div');
+  el.className = 'test';
+  try {
+    fn();
+    passed++;
+    el.classList.add('pass');
+    el.innerHTML = `<span class="icon">✅</span><span>${name}</span>`;
+  } catch(e) {
+    failed++;
+    el.classList.add('fail');
+    el.innerHTML = `<span class="icon">❌</span><div><div>${name}</div><div class="error-msg">${e.message}</div></div>`;
+  }
+  currentSuite.appendChild(el);
+}
+
+function expect(actual) {
+  return {
+    toBe(ex) { if (actual !== ex) throw new Error(`Expected ${JSON.stringify(actual)} to be ${JSON.stringify(ex)}`); },
+    toBeTruthy() { if (!actual) throw new Error(`Expected ${JSON.stringify(actual)} to be truthy`); },
+    toBeFalsy() { if (actual) throw new Error(`Expected ${JSON.stringify(actual)} to be falsy`); },
+    toContain(s) { if (!String(actual).includes(String(s))) throw new Error(`Expected "${actual}" to contain "${s}"`); },
+    toHaveLength(n) { if (actual.length !== n) throw new Error(`Expected length ${actual.length} to be ${n}`); },
+    toBeGreaterThan(n) { if (!(actual > n)) throw new Error(`Expected ${actual} > ${n}`); },
+  };
+}
+
+// ─── Run same tests as lexai.test.js ─────────────────────────────────────────
+describe('escapeHTML – XSS prevention', () => {
+  it('escapes < and > characters', () => { expect(escapeHTML('<script>alert("xss")</script>')).toContain('&lt;script&gt;'); });
+  it('escapes double quotes', () => { expect(escapeHTML('"hello"')).toBe('&quot;hello&quot;'); });
+  it('escapes ampersands', () => { expect(escapeHTML('a & b')).toBe('a &amp; b'); });
+  it('escapes single quotes', () => { expect(escapeHTML("it's")).toBe('it&#39;s'); });
+  it('returns empty string for empty input', () => { expect(escapeHTML('')).toBe(''); });
+  it('leaves safe text unchanged', () => { expect(escapeHTML('Hello, World! 123')).toBe('Hello, World! 123'); });
+});
+
+describe('extractCitations – citation parsing', () => {
+  it('extracts a simple page citation', () => { const c = extractCitations('See [Page 3].'); expect(c).toHaveLength(1); expect(c[0].pageNum).toBe(3); });
+  it('extracts page + clause citation', () => { const c = extractCitations('[Page 7, Clause 4.2]'); expect(c[0].label).toBe('Page 7, Clause 4.2'); });
+  it('deduplicates identical citations', () => { const c = extractCitations('[Page 3] and [Page 3]'); expect(c).toHaveLength(1); });
+  it('extracts multiple distinct citations', () => { const c = extractCitations('[Page 1] [Page 4, Clause 2.1] [Page 9]'); expect(c).toHaveLength(3); });
+  it('returns empty array with no citations', () => { expect(extractCitations('plain text')).toHaveLength(0); });
+  it('handles Article citations', () => { const c = extractCitations('[Page 2, Article 3]'); expect(c[0].sectionType).toBe('Article'); });
+  it('is case-insensitive', () => { const c = extractCitations('[page 6, clause 1.1]'); expect(c).toHaveLength(1); });
+});
+
+describe('getExcerpt – context extraction', () => {
+  it('returns empty for empty text', () => { expect(getExcerpt('', 'c')).toBe(''); });
+  it('excerpt centered on sectionId', () => { expect(getExcerpt('Before. Clause 4: terms. After.', 'Clause 4')).toContain('Clause 4'); });
+  it('falls back when sectionId not found', () => { expect(getExcerpt('General text here.', 'Clause 99')).toContain('General'); });
+});
+
+describe('validateFile – file validation', () => {
+  it('accepts valid PDF under size limit', () => { expect(validateFile({ type: 'application/pdf', size: 1024*1024 }).valid).toBeTruthy(); });
+  it('rejects non-PDF', () => { const r = validateFile({ type: 'text/html', size: 500 }); expect(r.valid).toBeFalsy(); });
+  it('rejects files over 20 MB', () => { const r = validateFile({ type: 'application/pdf', size: 25*1024*1024 }); expect(r.valid).toBeFalsy(); });
+  it('rejects null', () => { expect(validateFile(null).valid).toBeFalsy(); });
+  it('accepts exactly 20 MB', () => { expect(validateFile({ type: 'application/pdf', size: 20*1024*1024 }).valid).toBeTruthy(); });
+});
+
+describe('isNotFoundResponse – hallucination detection', () => {
+  it('detects NOT FOUND response', () => { expect(isNotFoundResponse('NOT FOUND IN DOCUMENT: ...')).toBeTruthy(); });
+  it('returns false for normal answer', () => { expect(isNotFoundResponse('The agreement [Page 3]...')).toBeFalsy(); });
+  it('is case insensitive', () => { expect(isNotFoundResponse('not found in document')).toBeTruthy(); });
+});
+
+// Summary
+document.getElementById('s-pass').textContent = passed;
+document.getElementById('s-fail').textContent = failed;
+document.getElementById('s-total').textContent = passed + failed;
+document.getElementById('s-pass').className = 'stat-n pass';
+if (failed > 0) {
+  document.getElementById('s-fail').className = 'stat-n fail';
+  document.title = `❌ ${failed} failed – LexAI Tests`;
+} else {
+  document.title = `✅ All passed – LexAI Tests`;
+}
+</script>
+</body>
+</html>
