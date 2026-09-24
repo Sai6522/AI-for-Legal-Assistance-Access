@@ -5,7 +5,7 @@
  * Architecture:
  *  - Parses uploaded PDF using PDF.js (CDN)
  *  - Chunks document text by page
- *  - Calls Google Gemini 1.5 Flash API directly from the browser
+ *  - Calls Google Gemini 2.5 Flash API directly from the browser
  *  - Enforces strict document-grounding via system prompt
  *  - Extracts citations (page, clause, excerpt) from AI responses
  *  - Zero hallucination policy: model must refuse if info not in document
@@ -23,9 +23,8 @@ if (typeof pdfjsLib !== 'undefined') {
 const GEMINI_API_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-const MAX_CONTEXT_CHARS  = 3_000_000; // ~3M chars — safe for Gemini 2.5 Flash Lite's 1M token window
+const MAX_CONTEXT_CHARS  = 3_000_000; // ~3M chars — safe for Gemini 2.5 Flash's 1M token window
 const MAX_FILE_SIZE_MB   = 20;
-const CHUNK_OVERLAP_CHARS = 200;     // Overlap between page chunks for context continuity
 
 // ─── APPLICATION STATE ────────────────────────────────────────────────────────
 const state = {
@@ -101,7 +100,43 @@ const dom = {
   modalExcerpt:   $('modal-excerpt'),
 };
 
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
+
+/**
+ * Returns a debounced version of `fn` that delays invocation by `delay` ms.
+ * Prevents rapid-fire calls (e.g. textarea input events on every keystroke).
+ * @param {Function} fn - Function to debounce.
+ * @param {number} delay - Milliseconds to wait after last call.
+ * @returns {Function}
+ */
+function debounce(fn, delay) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
+/**
+ * Sanitizes a string for safe insertion as DOM text content.
+ * Strips path separators and trims to a max length to prevent
+ * oversized filenames from breaking layout or leaking path info.
+ * @param {string} name - Raw filename from File API.
+ * @returns {string} Safe display name.
+ */
+function sanitizeFileName(name) {
+  return String(name)
+    .replace(/[/\\]/g, '')   // strip path separators
+    .replace(/\.{2,}/g, '')  // strip path traversal (..)
+    .replace(/[^\w.\- ]/g, '') // keep only safe chars
+    .trim()
+    .slice(0, 128);
+}
+
 // ─── THEME ────────────────────────────────────────────────────────────────────
+/**
+ * Initialises the colour theme from localStorage or OS preference.
+ */
 function initTheme() {
   const saved = localStorage.getItem('lexai-theme');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -109,6 +144,10 @@ function initTheme() {
   applyTheme(theme);
 }
 
+/**
+ * Applies a colour theme to the document root and persists the choice.
+ * @param {'light'|'dark'} theme
+ */
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('lexai-theme', theme);
@@ -205,7 +244,7 @@ async function handleFile(file) {
   // Show file info UI
   dom.dropZone.classList.add('hidden');
   dom.docInfo.classList.remove('hidden');
-  dom.docName.textContent = file.name;
+  dom.docName.textContent = sanitizeFileName(file.name); // sanitized before DOM insertion
   dom.docMeta.textContent = `${(sizeMB).toFixed(2)} MB`;
 
   // Reset state
@@ -299,6 +338,7 @@ function resetDocumentState() {
     charCount: 0,
   };
   state.conversationHistory = [];
+  cachedDocumentContext = null; // invalidate cache for new document
 }
 
 function removeDocument() {
@@ -337,6 +377,11 @@ function hideProgress() {
 }
 
 // ─── READY STATE ─────────────────────────────────────────────────────────────
+
+/**
+ * Syncs the chat input enabled/disabled state and notice text
+ * based on whether both an API key and a loaded document are present.
+ */
 function updateReadyState() {
   const hasDoc = state.document.fullText.length > 0;
   const hasKey = state.apiKey.length > 10;
@@ -361,15 +406,21 @@ function updateReadyState() {
 
 // ─── CHAT ─────────────────────────────────────────────────────────────────────
 
-// Auto-resize textarea
-dom.questionInput.addEventListener('input', () => {
+/**
+ * Handles textarea resize and character counter updates.
+ * Debounced to avoid excessive DOM writes on every keystroke.
+ */
+const handleInputResize = debounce(() => {
   dom.questionInput.style.height = 'auto';
   dom.questionInput.style.height = Math.min(dom.questionInput.scrollHeight, 160) + 'px';
 
   const len = dom.questionInput.value.length;
   dom.charCount.textContent = `${len} / 2000`;
   dom.charCount.className = 'char-count' + (len > 1800 ? ' danger' : len > 1500 ? ' warning' : '');
-});
+}, 100);
+
+// Auto-resize textarea
+dom.questionInput.addEventListener('input', handleInputResize);
 
 dom.questionInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -393,11 +444,25 @@ dom.suggestedList.addEventListener('click', e => {
   if (q) handleQuestion(q);
 });
 
+/** Minimum milliseconds between successive API submissions to prevent duplicate requests. */
+const MIN_REQUEST_INTERVAL_MS = 1000;
+let lastRequestTime = 0;
+
 /**
- * Main question handler: shows user message, calls Gemini, renders response.
+ * Main question handler: validates state, shows user message,
+ * enforces rate-limit, calls Gemini, and renders the response.
+ * @param {string} question - The user's natural-language question.
  */
 async function handleQuestion(question) {
   if (state.isLoading) return;
+
+  // Rate-limit guard: reject if last request was < 1 s ago
+  const now = Date.now();
+  if (now - lastRequestTime < MIN_REQUEST_INTERVAL_MS) {
+    showToast('Please wait a moment before sending another question.', 'warning');
+    return;
+  }
+  lastRequestTime = now;
 
   // Switch from welcome to chat view
   dom.welcomeState.classList.add('hidden');
@@ -437,6 +502,7 @@ async function handleQuestion(question) {
 /**
  * Builds a grounding-focused system instruction for Gemini.
  * This is the core of hallucination prevention.
+ * @returns {string} System instruction text.
  */
 function buildSystemInstruction() {
   return `You are LexAI, a precise legal document analysis assistant.
@@ -465,20 +531,43 @@ The document text follows. Answer all questions strictly from this content.`;
 }
 
 /**
- * Calls the Gemini 1.5 Flash API with the full document context.
- * Uses a conversation history for multi-turn support.
+ * Cached document context prefix — built once when a document is loaded,
+ * reused on every first-turn API call to avoid rebuilding on each question.
+ * Reset to null whenever a new document is loaded.
+ * @type {string|null}
+ */
+let cachedDocumentContext = null;
+
+/**
+ * Builds and caches the document context string for the first conversation turn.
+ * Subsequent calls return the cached value without re-building.
+ * @returns {string} Formatted document context string.
+ */
+function getDocumentContext() {
+  if (cachedDocumentContext === null) {
+    cachedDocumentContext =
+      `DOCUMENT TO ANALYZE:\n${state.document.fullText}\n\n---END OF DOCUMENT---\n\n`;
+  }
+  return cachedDocumentContext;
+}
+
+/**
+ * Calls the Gemini 2.5 Flash API with the full document context.
+ * The API key is sent via the x-goog-api-key request header (not URL query param)
+ * to prevent credential exposure in browser history and server access logs.
+ * Uses conversation history for multi-turn support.
+ * @param {string} question - The user's question to send to the model.
+ * @returns {Promise<string>} The model's text response.
  */
 async function callGemini(question) {
-  // Build context-augmented user message for the first turn
-  // For subsequent turns, document context is already in system instruction
+  // For the first turn, prepend the full document context to the question.
+  // For subsequent turns, document context is already established in history.
   const isFirstTurn = state.conversationHistory.length === 0;
 
   let userContent = question;
   if (isFirstTurn) {
-    userContent =
-      `DOCUMENT TO ANALYZE:\n${state.document.fullText}\n\n---END OF DOCUMENT---\n\nUSER QUESTION: ${question}`;
+    userContent = `${getDocumentContext()}USER QUESTION: ${question}`;
   } else {
-    // On subsequent turns, add a reminder about the document
     userContent = `USER QUESTION (about the same document): ${question}`;
   }
 
@@ -506,9 +595,15 @@ async function callGemini(question) {
     ],
   };
 
-  const res = await fetch(`${GEMINI_API_URL}?key=${encodeURIComponent(state.apiKey)}`, {
+  // API key is sent via request header (x-goog-api-key), NOT as a URL query param.
+  // Using a header prevents the key from appearing in browser history, server access
+  // logs, and Referer headers — a critical security improvement.
+  const res = await fetch(GEMINI_API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': state.apiKey,
+    },
     body: JSON.stringify(body),
   });
 
@@ -558,7 +653,10 @@ async function callGemini(question) {
 // ─── RENDERING ────────────────────────────────────────────────────────────────
 
 /**
- * Appends a user message bubble to the chat.
+ * Appends a user or assistant message bubble to the chat log.
+ * @param {'user'|'assistant'} role - Speaker role.
+ * @param {string} text - Message text content.
+ * @returns {HTMLElement} The created message element.
  */
 function appendMessage(role, text) {
   const el = createMessageElement(role, text);
@@ -692,6 +790,10 @@ function createMessageElement(role, text) {
   return wrapper;
 }
 
+/**
+ * Inserts an animated typing indicator bubble and returns its DOM id.
+ * @returns {string} Unique element id for later removal.
+ */
 function showTypingIndicator() {
   const id = 'typing-' + Date.now();
   const wrapper = document.createElement('div');
@@ -720,11 +822,18 @@ function showTypingIndicator() {
   return id;
 }
 
+/**
+ * Removes the typing indicator element from the chat log.
+ * @param {string} id - Element id returned by {@link showTypingIndicator}.
+ */
 function removeTypingIndicator(id) {
   const el = document.getElementById(id);
   if (el) el.remove();
 }
 
+/**
+ * Smoothly scrolls the chat message container to the latest message.
+ */
 function scrollChatToBottom() {
   requestAnimationFrame(() => {
     dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
@@ -784,6 +893,10 @@ function getExcerpt(pageText, sectionId) {
 }
 
 // ─── CITATION MODAL ───────────────────────────────────────────────────────────
+/**
+ * Opens the citation detail modal showing the raw source excerpt for a citation.
+ * @param {{ pageNum: number, sectionType: string|null, sectionId: string|null, excerpt: string }} cit
+ */
 function openCitationModal(cit) {
   dom.modalPage.textContent    = `Page ${cit.pageNum}`;
   dom.modalSection.textContent = cit.sectionId ? `${cit.sectionType} ${cit.sectionId}` : '–';
@@ -809,6 +922,11 @@ document.addEventListener('keydown', e => {
   }
 });
 
+/**
+ * Traps keyboard focus within a modal element while it is open.
+ * Automatically removes the handler when the element gains the 'hidden' class.
+ * @param {HTMLElement} element - The modal container element.
+ */
 function trapFocus(element) {
   const focusable = element.querySelectorAll(
     'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -837,6 +955,13 @@ function trapFocus(element) {
 }
 
 // ─── STATUS BADGES ────────────────────────────────────────────────────────────
+
+/**
+ * Shows a status badge element with a given message and visual type.
+ * @param {HTMLElement} el - The badge element to update.
+ * @param {string} msg - Message text to display.
+ * @param {'success'|'error'|'info'|'warning'} type - Visual style.
+ */
 function showStatus(el, msg, type) {
   el.textContent = msg;
   el.className = `status-badge ${type}`;
@@ -844,6 +969,13 @@ function showStatus(el, msg, type) {
 }
 
 // ─── TOAST NOTIFICATIONS ─────────────────────────────────────────────────────
+
+/**
+ * Displays a transient toast notification at the bottom-right of the screen.
+ * @param {string} message - Text to display in the toast.
+ * @param {'info'|'success'|'error'|'warning'} [type='info'] - Visual style.
+ * @param {number} [durationMs=5000] - Auto-dismiss delay in milliseconds.
+ */
 function showToast(message, type = 'info', durationMs = 5000) {
   const icons = {
     success: `<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`,
@@ -915,6 +1047,12 @@ function formatResponseHTML(text) {
   return `<p>${escaped}</p>`;
 }
 
+/**
+ * Escapes a string for safe insertion as HTML text content.
+ * Prevents XSS by replacing all HTML special characters with entities.
+ * @param {string} str - Raw input string.
+ * @returns {string} HTML-entity-encoded string.
+ */
 function escapeHTML(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -924,10 +1062,20 @@ function escapeHTML(str) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Escapes a string for safe insertion inside an HTML attribute value.
+ * @param {string} str - Raw input string.
+ * @returns {string} Attribute-safe encoded string.
+ */
 function escapeAttr(str) {
   return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+/**
+ * Formats a Date object as a locale-aware HH:MM time string.
+ * @param {Date} date
+ * @returns {string}
+ */
 function formatTime(date) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }

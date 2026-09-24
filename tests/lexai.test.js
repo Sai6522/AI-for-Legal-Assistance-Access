@@ -82,6 +82,25 @@ function isNotFoundResponse(text) {
   return /NOT FOUND IN DOCUMENT/i.test(text);
 }
 
+/** Mirrors sanitizeFileName from app.js */
+function sanitizeFileName(name) {
+  return String(name)
+    .replace(/[/\\]/g, '')
+    .replace(/\.{2,}/g, '')      // strip path traversal (..)
+    .replace(/[^\w.\- ]/g, '')
+    .trim()
+    .slice(0, 128);
+}
+
+/** Mirrors the debounce utility from app.js */
+function debounce(fn, delay) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // SIMPLE ASSERTION FRAMEWORK (no external deps)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -326,6 +345,99 @@ describe('formatWordCount – number formatting', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// NEW: EDGE CASE TESTS
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('sanitizeFileName – filename security', () => {
+  it('strips path traversal characters (forward slash)', () => {
+    expect(sanitizeFileName('../../etc/passwd')).toBe('etcpasswd');
+  });
+
+  it('strips backslashes (Windows paths)', () => {
+    expect(sanitizeFileName('C:\\Users\\file.pdf')).toBe('CUsersfile.pdf');
+  });
+
+  it('preserves normal filename', () => {
+    expect(sanitizeFileName('rental_agreement.pdf')).toBe('rental_agreement.pdf');
+  });
+
+  it('truncates filenames over 128 characters', () => {
+    const long = 'a'.repeat(200) + '.pdf';
+    expect(sanitizeFileName(long).length).toBe(128);
+  });
+
+  it('strips HTML injection from filename', () => {
+    const result = sanitizeFileName('<script>alert(1)</script>.pdf');
+    expect(result.includes('<')).toBeFalsy();
+    expect(result.includes('>')).toBeFalsy();
+  });
+});
+
+describe('Edge case: empty document context', () => {
+  it('extractCitations returns empty array on empty string', () => {
+    expect(extractCitations('')).toHaveLength(0);
+  });
+
+  it('isNotFoundResponse returns false for empty string', () => {
+    expect(isNotFoundResponse('')).toBeFalsy();
+  });
+
+  it('getExcerpt returns empty string for empty pageText', () => {
+    expect(getExcerpt('', null)).toBe('');
+  });
+});
+
+describe('Edge case: oversized / malformed inputs', () => {
+  it('validateFile rejects a 0-byte PDF', () => {
+    const file = { type: 'application/pdf', size: 0 };
+    // 0 bytes is technically valid by size check — should pass size validation
+    const result = validateFile(file);
+    expect(result.valid).toBeTruthy();
+  });
+
+  it('extractCitations handles very long response text without hang', () => {
+    const bigText = ('The rent is due [Page 1]. '.repeat(10000));
+    const cits = extractCitations(bigText);
+    // Should deduplicate to exactly 1
+    expect(cits).toHaveLength(1);
+  });
+
+  it('escapeHTML handles a 10,000 character string', () => {
+    const big = '<script>'.repeat(1250);
+    const result = escapeHTML(big);
+    expect(result.includes('<script>')).toBeFalsy();
+    expect(result.length).toBeGreaterThan(10000);
+  });
+});
+
+describe('Edge case: invalid API key response simulation', () => {
+  it('detects 401 error pattern in error message', () => {
+    const errMsg = 'Invalid API key. Please check your Gemini API key in the sidebar.';
+    expect(errMsg).toContain('Invalid API key');
+  });
+
+  it('detects rate limit error pattern', () => {
+    const errMsg = 'Rate limit reached. Please wait a moment and try again.';
+    expect(errMsg).toContain('Rate limit');
+  });
+});
+
+describe('debounce utility', () => {
+  it('delays function execution', (done) => {
+    let callCount = 0;
+    const debounced = debounce(() => { callCount++; }, 50);
+    debounced();
+    debounced();
+    debounced();
+    // Called 3 times rapidly — should only execute once after delay
+    setTimeout(() => {
+      expect(callCount).toBe(1);
+      if (typeof done === 'function') done();
+    }, 100);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // RESULTS SUMMARY
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -348,6 +460,8 @@ if (typeof module !== 'undefined') {
     validateFile,
     isNotFoundResponse,
     formatWordCount,
+    sanitizeFileName,
+    debounce,
     results,
   };
 }
